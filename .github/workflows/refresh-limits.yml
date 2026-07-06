@@ -1,0 +1,50 @@
+name: refresh-limits
+
+# Monthly: pull the newest CloudFormation registry schemas (via cfn-lint),
+# regenerate the limits database, and open a PR if anything changed.
+# Merging the PR is the human approval step; tagging a release ships it.
+
+on:
+  schedule:
+    - cron: "17 4 3 * *"   # 04:17 UTC on the 3rd of every month
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+
+      - name: Regenerate limits from the latest registry schemas
+        run: |
+          pip install -U cfn-lint
+          python tools/generate_limits.py --from-cfnlint \
+            -o python/cfn_name_check/limits_generated.py
+          echo "CFNLINT_VERSION=$(python -c 'import cfnlint; print(cfnlint.version.__version__)')" >> "$GITHUB_ENV"
+
+      - name: Run regression suite against the new database
+        run: |
+          pip install ./python pytest
+          python -m pytest tests/ -q
+
+      - name: Open PR if the database changed
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: auto/refresh-limits
+          commit-message: "chore: refresh limits DB from cfn-lint ${{ env.CFNLINT_VERSION }} registry schemas"
+          title: "Refresh limits database (registry schemas via cfn-lint ${{ env.CFNLINT_VERSION }})"
+          body: |
+            Automated monthly regeneration of `limits_generated.py` from the
+            CloudFormation registry schemas vendored in cfn-lint
+            ${{ env.CFNLINT_VERSION }}.
+
+            Review the diff (usually new resource types), merge, then tag a
+            release (`git tag vX.Y.Z && git push --tags`) to ship it.
+          labels: automated
+          delete-branch: true

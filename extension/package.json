@@ -1,0 +1,80 @@
+{
+  "name": "cfn-name-check",
+  "displayName": "CFN Name Length Check",
+  "description": "Worst-case AWS resource name length checking for CloudFormation templates. Resolves !Sub/!Ref/!If expressions (including the stack name from your Description convention) and flags names that exceed AWS service limits before you deploy.",
+  "version": "0.1.1",
+  "publisher": "kns",
+  "license": "MIT",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Linters"],
+  "activationEvents": ["onLanguage:yaml", "onLanguage:json"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "cfnNameCheck.scanWorkspace",
+        "title": "CFN Name Check: Scan Workspace"
+      },
+      {
+        "command": "cfnNameCheck.checkCurrentFile",
+        "title": "CFN Name Check: Check Current File"
+      }
+    ],
+    "configuration": {
+      "title": "CFN Name Length Check",
+      "properties": {
+        "cfnNameCheck.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the Python interpreter that has cfn-name-check installed. Empty = auto-detect (python3, then python, then py)."
+        },
+        "cfnNameCheck.stackName": {
+          "type": "string",
+          "default": "",
+          "description": "Override stack name for all templates. Empty = parse from Description via descriptionRegex; if that fails, budget mode."
+        },
+        "cfnNameCheck.descriptionRegex": {
+          "type": "string",
+          "default": "StackName=([^\\s|,;]+)",
+          "description": "Regex (one capture group) that extracts the stack name from the template Description. Change this if your naming convention changes."
+        },
+        "cfnNameCheck.warnMargin": {
+          "type": "number",
+          "default": 5,
+          "description": "Emit a warning when a name is within this many characters of its limit."
+        },
+        "cfnNameCheck.strictMode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Conservative mode: take the longest !If branch even when condition evaluation proves it unreachable."
+        },
+        "cfnNameCheck.extraLimits": {
+          "type": "object",
+          "default": {},
+          "description": "Additional limits: { \"AWS::Some::Type\": [[\"PropertyName\", 64, \"note\"]] }. Merged with the built-in database.",
+          "additionalProperties": true
+        },
+        "cfnNameCheck.showBudgetHints": {
+          "type": "boolean",
+          "default": true,
+          "description": "In budget mode (no stack name resolvable), show informational hints with the max stack-name length each property tolerates."
+        },
+        "cfnNameCheck.debounceMs": {
+          "type": "number",
+          "default": 400,
+          "description": "Delay after typing stops before re-checking the document."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "package": "vsce package --allow-missing-repository"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.0",
+    "@vscode/vsce": "^3.0.0"
+  }
+}

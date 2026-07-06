@@ -1,0 +1,59 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write   # PyPI trusted publishing (optional)
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install ./python pytest
+      - run: python -m pytest tests/ -q
+
+  build-and-release:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+
+      - name: Build wheel + sdist
+        run: |
+          pip install build
+          python -m build python -o dist
+
+      - name: Build extension (.vsix)
+        working-directory: extension
+        run: |
+          npm ci || npm install
+          npm run compile
+          npx vsce package --allow-missing-repository -o ../dist/
+
+      - name: GitHub Release with assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+
+      # Optional: publish the Python package to PyPI so the whole fleet can
+      # just `pip install -U cfn-name-check`. Enable by configuring PyPI
+      # "trusted publishing" for this repo (no token/secret needed), then
+      # remove the `if: false` line.
+      - name: Publish to PyPI
+        if: false
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          skip-existing: true

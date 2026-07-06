@@ -1,0 +1,59 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: |
+  StackName=pipeline-example-sample-service-api-dev | sanitized regression fixture
+  Exercises: Description-based stack name, EnvSuffix !If chains with an
+  unreachable fallback branch, near-limit and over-limit names, nested
+  policy/target names, and resource-to-resource references.
+
+Parameters:
+  RepositoryBranch:
+    Type: String
+    AllowedValues: [staging, master, main]
+    Default: staging
+  NotifyEmail:
+    Type: String
+    Description: Free-form parameter referenced by a Condition (no AllowedValues)
+
+Conditions:
+  IsMainBranch: !Equals [!Ref RepositoryBranch, main]
+  IsMasterBranch: !Equals [!Ref RepositoryBranch, master]
+  IsStagingBranch: !Equals [!Ref RepositoryBranch, staging]
+  HasEmail: !Not [!Equals [!Ref NotifyEmail, ""]]
+
+Resources:
+  # over the 64-char IAM limit with this stack name (fixed infix 26 + suffix)
+  OverLimitRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ["${AWS::StackName}-EventBridgeExecutionRole-${EnvSuffix}", EnvSuffix: !If [IsMasterBranch, prod, !If [IsMainBranch, prod, !If [IsStagingBranch, dev, !Ref RepositoryBranch]]]]
+      AssumeRolePolicyDocument: {Version: "2012-10-17", Statement: []}
+      Policies:
+        - PolicyName: !Sub "${AWS::StackName}-inline-policy"
+          PolicyDocument: {Version: "2012-10-17", Statement: []}
+
+  # inside the limit but within the default warn margin
+  NearLimitRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub ["${AWS::StackName}-EventRuleTrigger-${EnvSuffix}", EnvSuffix: !If [IsMasterBranch, prod, !If [IsMainBranch, prod, !If [IsStagingBranch, dev, !Ref RepositoryBranch]]]]
+      EventPattern: {source: [aws.codecommit]}
+      Targets:
+        - Id: static-target
+          Arn: !GetAtt SafeFunction.Arn
+
+  # comfortable margin; also referenced by name from another resource
+  SafeFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-fn"
+      Role: !GetAtt OverLimitRole.Arn
+      Code: {ZipFile: "def handler(e, c): return"}
+      Runtime: python3.12
+      Handler: index.handler
+
+  # no explicit name: CFN auto-generates -> must produce no finding
+  UnnamedBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
