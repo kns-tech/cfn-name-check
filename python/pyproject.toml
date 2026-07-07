@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cfn-name-check"
-version = "0.2.1"
+version = "0.2.3"
 description = "Worst-case AWS resource name length checker for CloudFormation templates"
 requires-python = ">=3.9"
 dependencies = ["PyYAML>=6.0"]
