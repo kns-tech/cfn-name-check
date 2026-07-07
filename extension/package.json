@@ -2,12 +2,19 @@
   "name": "cfn-name-check",
   "displayName": "CFN Name Length Check",
   "description": "Worst-case AWS resource name length checking for CloudFormation templates. Resolves !Sub/!Ref/!If expressions (including the stack name from your Description convention) and flags names that exceed AWS service limits before you deploy.",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "publisher": "kns",
   "license": "MIT",
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["Linters"],
-  "activationEvents": ["onLanguage:yaml", "onLanguage:json"],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Linters"
+  ],
+  "activationEvents": [
+    "onLanguage:yaml",
+    "onLanguage:json"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
@@ -18,6 +25,10 @@
       {
         "command": "cfnNameCheck.checkCurrentFile",
         "title": "CFN Name Check: Check Current File"
+      },
+      {
+        "command": "cfnNameCheck.checkForCoreUpdate",
+        "title": "CFN Name Check: Check for Core Update Now"
       }
     ],
     "configuration": {
@@ -26,7 +37,8 @@
         "cfnNameCheck.pythonPath": {
           "type": "string",
           "default": "",
-          "description": "Path to the Python interpreter that has cfn-name-check installed. Empty = auto-detect (python3, then python, then py)."
+          "description": "Path to the Python interpreter that has cfn-name-check installed. Empty = auto-detect (python3, then python, then py).",
+          "scope": "application"
         },
         "cfnNameCheck.stackName": {
           "type": "string",
@@ -63,6 +75,34 @@
           "type": "number",
           "default": 400,
           "description": "Delay after typing stops before re-checking the document."
+        },
+        "cfnNameCheck.updateCheck": {
+          "type": "string",
+          "enum": [
+            "off",
+            "github",
+            "pypi"
+          ],
+          "default": "off",
+          "description": "Check for cfn-name-check CORE (Python package) updates and offer one-click install. The extension itself never needs updating. SECURITY: only the user-level setting is honored; workspace values are ignored.",
+          "scope": "application"
+        },
+        "cfnNameCheck.updateGithubRepo": {
+          "type": "string",
+          "default": "",
+          "description": "GitHub repo (owner/name) whose Releases carry the core wheel, e.g. kns-tech/cfn-name-check. Used when updateCheck = github. User-level setting only.",
+          "scope": "application"
+        },
+        "cfnNameCheck.updatePackage": {
+          "type": "string",
+          "default": "cfn-name-check",
+          "description": "PyPI package name used when updateCheck = pypi. User-level setting only.",
+          "scope": "application"
+        },
+        "cfnNameCheck.updateIntervalHours": {
+          "type": "number",
+          "default": 24,
+          "description": "Minimum hours between update checks (avoids GitHub API rate limits on shared office IPs)."
         }
       }
     }

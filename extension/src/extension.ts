@@ -41,6 +41,16 @@ function cfg<T>(key: string, def: T): T {
   return vscode.workspace.getConfiguration("cfnNameCheck").get<T>(key, def);
 }
 
+// SECURITY: settings that influence process execution or update sources must
+// never be readable from workspace scope — a cloned repo's .vscode/settings.json
+// could otherwise redirect updates to a malicious package or binary.
+function cfgGlobal<T>(key: string, def: T): T {
+  const insp = vscode.workspace.getConfiguration("cfnNameCheck").inspect<T>(key);
+  return insp?.globalValue ?? insp?.defaultValue ?? def;
+}
+
+const REPO_RE = /^[\w.-]+\/[\w.-]+$/;
+
 function looksLikeTemplate(doc: vscode.TextDocument): boolean {
   if (!["yaml", "json"].includes(doc.languageId)) return false;
   const head = doc.getText(new vscode.Range(0, 0, Math.min(doc.lineCount, 400), 0));
@@ -48,7 +58,7 @@ function looksLikeTemplate(doc: vscode.TextDocument): boolean {
 }
 
 async function resolvePython(): Promise<string | null> {
-  const configured = cfg("pythonPath", "");
+  const configured = cfgGlobal("pythonPath", "");
   const candidates = configured ? [configured] : ["python3", "python", "py"];
   for (const c of candidates) {
     const ver = await new Promise<string | null>((res) => {
@@ -77,18 +87,19 @@ function semverLess(a: string, b: string): boolean {
 }
 
 async function latestCoreVersion(): Promise<{ version: string; installSpec: string } | null> {
-  const mode = cfg("updateCheck", "off");
+  const mode = cfgGlobal<"off" | "pypi" | "github">("updateCheck", "off");
   try {
     if (mode === "pypi") {
-      const pkg = cfg("updatePackage", "cfn-name-check");
+      const pkg = cfgGlobal("updatePackage", "cfn-name-check");
+      if (!/^[\w.-]+$/.test(pkg)) return null;
       const r = await fetch(`https://pypi.org/pypi/${pkg}/json`);
       if (!r.ok) return null;
       const j: any = await r.json();
       return { version: j.info.version, installSpec: `${pkg}` };
     }
     if (mode === "github") {
-      const repo = cfg("updateGithubRepo", "");
-      if (!repo) return null;
+      const repo = cfgGlobal("updateGithubRepo", "");
+      if (!repo || !REPO_RE.test(repo)) return null;
       const r = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
         headers: { "User-Agent": "cfn-name-check-vscode" },
       });
@@ -108,7 +119,7 @@ async function latestCoreVersion(): Promise<{ version: string; installSpec: stri
 }
 
 async function maybeCheckForCoreUpdate(state: vscode.Memento) {
-  if (cfg("updateCheck", "off") === "off" || !cachedPython || !coreVersion) return;
+  if (cfgGlobal<"off" | "pypi" | "github">("updateCheck", "off") === "off" || !cachedPython || !coreVersion) return;
   const intervalH = cfg("updateIntervalHours", 24);
   const last = state.get<number>("lastUpdateCheck", 0);
   if (Date.now() - last < intervalH * 3600 * 1000) return;
