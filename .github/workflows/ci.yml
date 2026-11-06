@@ -1,0 +1,56 @@
+name: ci
+
+# Fast feedback on every push to main and every PR: regression tests on the
+# oldest and newest supported Python, extension compile, workflow lint.
+# (Pushes made by github-actions[bot] with GITHUB_TOKEN don't trigger this;
+# those paths already run the tests inside release.yml.)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.12"]   # requires-python >= 3.9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ matrix.python-version }}" }
+      - run: pip install ./python pytest
+      - run: python -m pytest tests/ -q
+      - name: CLI smoke test
+        run: cfn-name-check tests/fixtures/regression.yml --fail-on never
+
+  extension-compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - working-directory: extension
+        run: |
+          npm ci || npm install
+          npm run compile
+
+  workflow-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: actionlint
+        run: |
+          pip install actionlint-py
+          # -ignore: the deliberately disabled PyPI step in release.yml
+          actionlint -ignore 'constant expression "false" in condition' .github/workflows/*.yml

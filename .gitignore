@@ -5,3 +5,4 @@ out/
 node_modules/
 *.vsix
 .vscode-test/
+build/
