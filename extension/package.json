@@ -2,7 +2,7 @@
   "name": "cfn-name-check",
   "displayName": "CFN Name Length Check",
   "description": "Worst-case AWS resource name length checking for CloudFormation templates. Resolves !Sub/!Ref/!If expressions (including the stack name from your Description convention) and flags names that exceed AWS service limits before you deploy.",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "publisher": "kns",
   "license": "MIT",
   "engines": {
@@ -97,6 +97,12 @@
           "type": "string",
           "default": "cfn-name-check",
           "description": "PyPI package name used when updateCheck = pypi. User-level setting only.",
+          "scope": "application"
+        },
+        "cfnNameCheck.updateAutoInstall": {
+          "type": "boolean",
+          "default": false,
+          "description": "Install core updates automatically, without asking (shows a notification when done). Requires updateCheck = github or pypi. SECURITY: only the user-level setting is honored; workspace values are ignored.",
           "scope": "application"
         },
         "cfnNameCheck.updateIntervalHours": {

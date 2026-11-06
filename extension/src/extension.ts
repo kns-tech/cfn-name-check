@@ -116,7 +116,13 @@ async function latestCoreVersion(): Promise<{ version: string; installSpec: stri
       }
       const j: any = await r.json();
       const version = String(j.tag_name || "").replace(/^v/, "");
-      const wheel = (j.assets || []).find((a: any) => a.name.endsWith(".whl"));
+      // Only accept a wheel served from this repo's own release downloads.
+      const wheel = (j.assets || []).find(
+        (a: any) =>
+          typeof a.name === "string" && a.name.endsWith(".whl") &&
+          typeof a.browser_download_url === "string" &&
+          a.browser_download_url.startsWith(`https://github.com/${repo}/releases/download/`)
+      );
       const installSpec = wheel
         ? wheel.browser_download_url
         : `cfn-name-check @ git+https://github.com/${repo}@${j.tag_name}#subdirectory=python`;
@@ -164,6 +170,13 @@ async function maybeCheckForCoreUpdate(state: vscode.Memento, manual = false) {
     tell(`core is up to date (${coreVersion}).`);
     return;
   }
+  // Opt-in silent install. User scope only (cfgGlobal): a workspace must never
+  // be able to turn on unattended pip installs.
+  if (cfgGlobal("updateAutoInstall", false)) {
+    output.appendLine(`update check: auto-installing core ${latest.version} (installed: ${coreVersion})`);
+    await installCore(latest);
+    return;
+  }
   if (!manual && state.get<string>("skippedVersion") === latest.version) return;
   const pick = await vscode.window.showInformationMessage(
     `cfn-name-check core ${latest.version} is available (installed: ${coreVersion}). ` +
@@ -175,6 +188,10 @@ async function maybeCheckForCoreUpdate(state: vscode.Memento, manual = false) {
     return;
   }
   if (pick !== "Update now") return;
+  await installCore(latest);
+}
+
+async function installCore(latest: { version: string; installSpec: string }) {
   await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: `Updating cfn-name-check core to ${latest.version}…` },
     () =>
