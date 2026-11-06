@@ -134,7 +134,22 @@ Resources:
 
 
 def test_generated_registry_coverage():
-    """A type absent from the curated set must still be checked (SageMaker 63)."""
+    """A type absent from the curated set must still be checked via the generated DB."""
+    tpl = """
+Description: StackName=analytics-platform-customer-behaviour-tracking-dev
+Resources:
+  A:
+    Type: AWS::AppConfig::Application
+    Properties:
+      Name: !Sub "${AWS::StackName}-feature-flag-application"
+"""
+    f = {x["property"]: x for x in check_template(tpl)["findings"]}["Name"]
+    assert f["severity"] == "error"
+    assert f["limit"] == 64
+
+
+def test_curated_overrides_registry_sagemaker():
+    """Registry schema says 64; SageMaker API says 63. Curated correction must win."""
     tpl = """
 Description: StackName=analytics-platform-customer-behaviour-tracking-dev
 Resources:
