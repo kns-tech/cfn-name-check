@@ -2,7 +2,7 @@
   "name": "cfn-name-check",
   "displayName": "CFN Name Length Check",
   "description": "Worst-case AWS resource name length checking for CloudFormation templates. Resolves !Sub/!Ref/!If expressions (including the stack name from your Description convention) and flags names that exceed AWS service limits before you deploy.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "kns",
   "license": "MIT",
   "engines": {

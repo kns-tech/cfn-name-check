@@ -93,17 +93,27 @@ async function latestCoreVersion(): Promise<{ version: string; installSpec: stri
       const pkg = cfgGlobal("updatePackage", "cfn-name-check");
       if (!/^[\w.-]+$/.test(pkg)) return null;
       const r = await fetch(`https://pypi.org/pypi/${pkg}/json`);
-      if (!r.ok) return null;
+      if (!r.ok) {
+        output.appendLine(`update check: PyPI returned HTTP ${r.status} for ${pkg}`);
+        return null;
+      }
       const j: any = await r.json();
       return { version: j.info.version, installSpec: `${pkg}` };
     }
     if (mode === "github") {
       const repo = cfgGlobal("updateGithubRepo", "");
-      if (!repo || !REPO_RE.test(repo)) return null;
+      if (!repo || !REPO_RE.test(repo)) {
+        output.appendLine(`update check: cfnNameCheck.updateGithubRepo "${repo}" is not a valid owner/name`);
+        return null;
+      }
       const r = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
         headers: { "User-Agent": "cfn-name-check-vscode" },
       });
-      if (!r.ok) return null;
+      if (!r.ok) {
+        const hint = r.status === 403 || r.status === 429 ? " (likely GitHub API rate limit — try later)" : "";
+        output.appendLine(`update check: GitHub returned HTTP ${r.status} for ${repo}${hint}`);
+        return null;
+      }
       const j: any = await r.json();
       const version = String(j.tag_name || "").replace(/^v/, "");
       const wheel = (j.assets || []).find((a: any) => a.name.endsWith(".whl"));
@@ -112,21 +122,49 @@ async function latestCoreVersion(): Promise<{ version: string; installSpec: stri
         : `cfn-name-check @ git+https://github.com/${repo}@${j.tag_name}#subdirectory=python`;
       return version ? { version, installSpec } : null;
     }
-  } catch {
-    /* offline / rate-limited: silently skip */
+  } catch (e) {
+    output.appendLine(`update check: request failed (offline?): ${e}`);
   }
   return null;
 }
 
-async function maybeCheckForCoreUpdate(state: vscode.Memento) {
-  if (cfgGlobal<"off" | "pypi" | "github">("updateCheck", "off") === "off" || !cachedPython || !coreVersion) return;
-  const intervalH = cfg("updateIntervalHours", 24);
-  const last = state.get<number>("lastUpdateCheck", 0);
-  if (Date.now() - last < intervalH * 3600 * 1000) return;
+// `manual` = invoked from the command palette: report every outcome instead of
+// staying silent, and ignore the interval throttle / skipped version.
+async function maybeCheckForCoreUpdate(state: vscode.Memento, manual = false) {
+  const tell = (msg: string, level: "info" | "error" = "info") => {
+    output.appendLine(`update check: ${msg}`);
+    if (!manual) return;
+    if (level === "error") vscode.window.showErrorMessage(`cfn-name-check: ${msg}`);
+    else vscode.window.showInformationMessage(`cfn-name-check: ${msg}`);
+  };
+
+  if (cfgGlobal<"off" | "pypi" | "github">("updateCheck", "off") === "off") {
+    if (manual) tell('update check is off — set "cfnNameCheck.updateCheck" to "github" or "pypi" in your USER settings.');
+    return;
+  }
+  // The interpreter is otherwise only resolved lazily when a template is
+  // checked; resolve it here so the update check works with no template open.
+  if (!cachedPython || !coreVersion) cachedPython = await resolvePython();
+  if (!cachedPython || !coreVersion) {
+    tell("Python package not found — pip install it, or set cfnNameCheck.pythonPath (user settings).", "error");
+    return;
+  }
+  if (!manual) {
+    const intervalH = cfg("updateIntervalHours", 24);
+    const last = state.get<number>("lastUpdateCheck", 0);
+    if (Date.now() - last < intervalH * 3600 * 1000) return;
+  }
   await state.update("lastUpdateCheck", Date.now());
   const latest = await latestCoreVersion();
-  if (!latest || !semverLess(coreVersion, latest.version)) return;
-  if (state.get<string>("skippedVersion") === latest.version) return;
+  if (!latest) {
+    tell("couldn't determine the latest version (offline or rate-limited) — see Output → CFN Name Check.", "error");
+    return;
+  }
+  if (!semverLess(coreVersion, latest.version)) {
+    tell(`core is up to date (${coreVersion}).`);
+    return;
+  }
+  if (!manual && state.get<string>("skippedVersion") === latest.version) return;
   const pick = await vscode.window.showInformationMessage(
     `cfn-name-check core ${latest.version} is available (installed: ${coreVersion}). ` +
       `Updating refreshes the AWS limits database — no extension update needed.`,
@@ -144,10 +182,20 @@ async function maybeCheckForCoreUpdate(state: vscode.Memento) {
         const p = spawn(cachedPython!, ["-m", "pip", "install", "--upgrade", latest.installSpec]);
         let err = "";
         p.stderr.on("data", (d) => (err += d));
-        p.on("exit", (code) => {
+        p.on("exit", async (code) => {
           if (code === 0) {
-            coreVersion = latest.version;
-            vscode.window.showInformationMessage(`cfn-name-check core updated to ${latest.version}.`);
+            // Re-probe instead of assuming: confirms the new version actually imports.
+            cachedPython = null;
+            coreVersion = null;
+            cachedPython = await resolvePython();
+            if (coreVersion === latest.version) {
+              vscode.window.showInformationMessage(`cfn-name-check core updated to ${latest.version}.`);
+            } else {
+              output.appendLine(`core update: pip succeeded but interpreter reports ${coreVersion ?? "no package"}`);
+              vscode.window.showWarningMessage(
+                `cfn-name-check: pip finished, but the interpreter reports ${coreVersion ?? "no package"} — see Output panel.`
+              );
+            }
             vscode.workspace.textDocuments.forEach(scheduleCheck);
           } else {
             output.appendLine(`core update failed: ${err}`);
@@ -155,7 +203,11 @@ async function maybeCheckForCoreUpdate(state: vscode.Memento) {
           }
           resolve();
         });
-        p.on("error", () => resolve());
+        p.on("error", (e) => {
+          output.appendLine(`core update failed to start pip: ${e}`);
+          vscode.window.showErrorMessage("cfn-name-check core update failed — see Output panel.");
+          resolve();
+        });
       })
   );
 }
@@ -407,10 +459,8 @@ export function activate(context: vscode.ExtensionContext) {
       if (doc) checkDocument(doc);
     }),
     vscode.commands.registerCommand("cfnNameCheck.checkForCoreUpdate", async () => {
-      await context.globalState.update("lastUpdateCheck", 0);
       await context.globalState.update("skippedVersion", undefined);
-      await maybeCheckForCoreUpdate(context.globalState);
-      vscode.window.setStatusBarMessage(`cfn-name-check core: ${coreVersion ?? "not found"}`, 5000);
+      await maybeCheckForCoreUpdate(context.globalState, true);
     }),
     vscode.commands.registerCommand("cfnNameCheck.copyWorstCase", (s: string) => {
       vscode.env.clipboard.writeText(s);
