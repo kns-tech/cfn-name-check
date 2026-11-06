@@ -97,6 +97,14 @@ CURATED = {
     "AWS::KinesisFirehose::DeliveryStream": [("DeliveryStreamName", 64, "Firehose delivery stream", {})],
     "AWS::Glue::Job": [("Name", 255, "Glue job name", {})],
 
+    # --- SageMaker ---
+    # Registry schema (cfn-lint >= 1.57) says maxLength 64; the SageMaker
+    # CreateEndpoint API reference says 63 (pattern {0,62}). The API wins.
+    "AWS::SageMaker::Endpoint": [
+        ("EndpointName", 63, "SageMaker endpoint name", {}),
+        ("EndpointConfigName", 63, "SageMaker endpoint config name", {}),
+    ],
+
     # --- CloudFormation / misc ---
     "AWS::CloudFormation::Stack": [("StackName", 128, "Nested stack name", {})],
     "AWS::AutoScaling::AutoScalingGroup": [("AutoScalingGroupName", 255, "ASG name", {})],
