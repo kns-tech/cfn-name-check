@@ -1,8 +1,18 @@
 name: refresh-limits
 
-# Monthly: pull the newest CloudFormation registry schemas (via cfn-lint),
-# regenerate the limits database, and open a PR if anything changed.
-# Merging the PR is the human approval step; tagging a release ships it.
+# Monthly, hands-off: pull the newest CloudFormation registry schemas (via
+# cfn-lint), regenerate the limits database, and decide automatically:
+#
+#   unchanged -> nothing to do
+#   safe      -> only additions / tightened limits: tests, bump patch version,
+#                commit + tag on main, then run release.yml (GitHub Release)
+#   review    -> a limit got LOOSER or a property was REMOVED: open a PR with
+#                the report for a human (the one deliberate gate)
+#   failure   -> tests or generation failed: open (or reuse) an issue
+#
+# The verdict comes from tools/check_limits_diff.py, which compares EFFECTIVE
+# limits (curated overrides applied), so registry regressions already pinned
+# in limits.py don't block.
 
 on:
   schedule:
@@ -12,39 +22,97 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  issues: write
+  id-token: write   # passed through to release.yml (PyPI trusted publishing)
+
+concurrency:
+  group: version-bump-main   # shared with bump-and-release.yml: never two bumps at once
+  cancel-in-progress: false
 
 jobs:
   refresh:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.ship.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
+        with: { ref: main }
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
 
       - name: Regenerate limits from the latest registry schemas
         run: |
+          cp python/cfn_name_check/limits_generated.py "$RUNNER_TEMP/limits_old.py"
           pip install -U cfn-lint
           python tools/generate_limits.py --from-cfnlint \
             -o python/cfn_name_check/limits_generated.py
           echo "CFNLINT_VERSION=$(python -c 'import cfnlint; print(cfnlint.version.__version__)')" >> "$GITHUB_ENV"
 
+      - name: Classify the change (unchanged / safe / review)
+        id: diff
+        run: |
+          # exit 3 = review; the verdict is read from the step output, not the exit code
+          python tools/check_limits_diff.py "$RUNNER_TEMP/limits_old.py" \
+            python/cfn_name_check/limits_generated.py \
+            --report "$RUNNER_TEMP/report.md" || [ $? -eq 3 ]
+
       - name: Run regression suite against the new database
+        if: steps.diff.outputs.verdict != 'unchanged'
         run: |
           pip install ./python pytest
           python -m pytest tests/ -q
 
-      - name: Open PR if the database changed
+      - name: Needs review -> open PR
+        if: steps.diff.outputs.verdict == 'review'
         uses: peter-evans/create-pull-request@v6
         with:
           branch: auto/refresh-limits
+          add-paths: python/cfn_name_check/limits_generated.py
           commit-message: "chore: refresh limits DB from cfn-lint ${{ env.CFNLINT_VERSION }} registry schemas"
-          title: "Refresh limits database (registry schemas via cfn-lint ${{ env.CFNLINT_VERSION }})"
-          body: |
-            Automated monthly regeneration of `limits_generated.py` from the
-            CloudFormation registry schemas vendored in cfn-lint
-            ${{ env.CFNLINT_VERSION }}.
-
-            Review the diff (usually new resource types), merge, then tag a
-            release (`git tag vX.Y.Z && git push --tags`) to ship it.
-          labels: automated
+          title: "Review: limits refresh (cfn-lint ${{ env.CFNLINT_VERSION }}) loosens or removes limits"
+          body-path: ${{ runner.temp }}/report.md
+          labels: automated, needs-review
           delete-branch: true
+
+      - name: Safe -> bump patch version, commit and tag on main
+        id: ship
+        if: steps.diff.outputs.verdict == 'safe'
+        run: |
+          NEW=$(python tools/bump_version.py patch)
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add python/cfn_name_check/limits_generated.py python/pyproject.toml python/cfn_name_check/__init__.py
+          git commit -m "chore: refresh limits DB from cfn-lint $CFNLINT_VERSION; release v$NEW" \
+                     -m "Automated: check_limits_diff verdict 'safe' (additions/tightenings only)."
+          git tag "v$NEW"
+          git push --atomic origin HEAD:main "v$NEW"
+          echo "tag=v$NEW" >> "$GITHUB_OUTPUT"
+
+      - name: On failure -> open (or reuse) an issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create refresh-limits-failure --color B60205 --force >/dev/null 2>&1 || true
+          N=$(gh issue list --label refresh-limits-failure --state open --json number --jq 'length')
+          if [ "$N" = "0" ]; then
+            gh issue create --label refresh-limits-failure \
+              --title "refresh-limits failed (cfn-lint ${CFNLINT_VERSION:-unknown})" \
+              --body "The monthly limits refresh failed and nothing was released: $RUN_URL"
+          else
+            NUM=$(gh issue list --label refresh-limits-failure --state open --json number --jq '.[0].number')
+            gh issue comment "$NUM" --body "Failed again: $RUN_URL"
+          fi
+
+  release:
+    needs: refresh
+    if: needs.refresh.outputs.tag != ''
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.refresh.outputs.tag }}
+    secrets: inherit
+    permissions:
+      contents: write
+      id-token: write

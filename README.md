@@ -127,6 +127,9 @@ Host launches with the extension loaded from source.
 | `cfnNameCheck.extraLimits` | `{}` | Add resource types: `{"AWS::X::Y": [["Name", 64, "note"]]}` |
 | `cfnNameCheck.pythonPath` | auto | Interpreter with the core installed |
 | `cfnNameCheck.showBudgetHints` | `true` | Info hints in budget mode |
+| `cfnNameCheck.updateCheck` | `off` | `github` / `pypi`: check for core updates (user settings only) |
+| `cfnNameCheck.updateGithubRepo` | `""` | `owner/name` whose Releases carry the wheel (user settings only) |
+| `cfnNameCheck.updateAutoInstall` | `false` | Install core updates without asking (user settings only) |
 
 The same knobs exist as CLI flags, so CI and editor share one engine and can't
 drift.
@@ -159,12 +162,30 @@ you generate names outside the Description convention.
 
 ## Maintenance automation
 
-- `.github/workflows/refresh-limits.yml` — monthly: regenerates the limits DB
-  from the newest CloudFormation registry schemas and opens a PR when AWS adds
-  or changes resource types. Merge = approve.
-- `.github/workflows/release.yml` — on version tag: runs the regression suite,
-  builds wheel + vsix, attaches both to a GitHub Release. Optional PyPI
-  publishing via trusted publishing (see the commented job).
+- `.github/workflows/refresh-limits.yml` — monthly, hands-off: regenerates the
+  limits DB from the newest CloudFormation registry schemas, then
+  `tools/check_limits_diff.py` classifies the change by **effective** limit
+  (curated overrides applied):
+  - **unchanged** → nothing happens.
+  - **safe** (only new properties / tightened limits) → tests, patch-version
+    bump, commit + tag on `main`, GitHub Release. No human involved.
+  - **review** (a limit got *looser* or a property was *removed*) → opens a PR
+    with the report. Check each item against the AWS API reference, add a
+    curated override in `limits.py` where the registry is wrong, merge, tag.
+  - **failure** → opens (or comments on) a `refresh-limits-failure` issue.
+- `.github/workflows/release.yml` — on version tag, or called by
+  refresh-limits: runs the regression suite, builds wheel + vsix, attaches both
+  to a GitHub Release. Dispatched on a branch it only builds (artifacts on the
+  run). Optional PyPI publishing via trusted publishing (see the disabled step).
 
-Release flow: merge changes → bump version in `python/pyproject.toml` and
-`cfn_name_check/__init__.py` → `git tag v0.x.y && git push --tags`.
+- `.github/workflows/bump-and-release.yml` — one-click release for your own
+  changes: Actions → **bump-and-release** → Run workflow → pick
+  `patch`/`minor`/`major`. Runs tests, bumps the core version in both
+  `pyproject.toml` and `__init__.py` (via `tools/bump_version.py`), commits +
+  tags on `main`, publishes the GitHub Release. Never edit versions or push
+  tags by hand. (The extension version in `extension/package.json` is separate:
+  bump it together with extension code changes.)
+
+Consumers stay current with no clicks: CI installs with `pip install -U`, and
+in VS Code set (user settings) `cfnNameCheck.updateCheck` = `github` plus
+`cfnNameCheck.updateAutoInstall` = `true` (extension ≥ 0.3.0).

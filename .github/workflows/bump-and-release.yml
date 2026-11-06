@@ -1,0 +1,68 @@
+name: bump-and-release
+
+# One-click release from the Actions tab: Run workflow -> pick patch/minor/major.
+# Runs the tests, bumps the core version in pyproject.toml AND __init__.py,
+# commits + tags on main, then calls release.yml (GitHub Release with wheel +
+# vsix). No manual version edits or tag pushes.
+#
+# The extension version (extension/package.json) is independent: bump it in
+# the same change as the extension code; this release then ships the new vsix.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Which part of the core version to bump"
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+
+permissions:
+  contents: write
+  id-token: write   # passed through to release.yml (PyPI trusted publishing)
+
+concurrency:
+  group: version-bump-main   # shared with refresh-limits.yml: never two bumps at once
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+
+      - name: Run regression suite before releasing
+        run: |
+          pip install ./python pytest
+          python -m pytest tests/ -q
+
+      - name: Bump version, commit and tag on main
+        id: tag
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          NEW=$(python tools/bump_version.py "$BUMP")
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add python/pyproject.toml python/cfn_name_check/__init__.py
+          git commit -m "chore: release v$NEW ($BUMP bump via bump-and-release)"
+          git tag "v$NEW"
+          git push --atomic origin HEAD:main "v$NEW"
+          echo "tag=v$NEW" >> "$GITHUB_OUTPUT"
+          echo "Released **v$NEW** ($BUMP bump)" >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    needs: bump
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.bump.outputs.tag }}
+    secrets: inherit
+    permissions:
+      contents: write
+      id-token: write
